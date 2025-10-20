@@ -1,6 +1,4 @@
-// api/placeArt.js
-// Требуется переменная окружения REPLICATE_API_TOKEN в Vercel.
-
+// api/placeArt.js — Node.js runtime
 import fetch from 'node-fetch';
 
 export const config = { runtime: 'nodejs' };
@@ -41,33 +39,23 @@ export default async function handler(req) {
     return sendJSON(400, { error: 'interiorImage and artworkImage are required (base64 without prefix)' });
   }
 
-  // Конвертируем в data URLs
   const interiorDataUrl = `data:image/jpeg;base64,${interiorImage}`;
   const artworkDataUrl  = `data:image/png;base64,${artworkImage}`;
 
   try {
-    // Публичная модель "двойной вход: фон + оверлей" (пример для MVP)
-    // Если Replicate поменяет версию, мы обновим hash.
-    const version = '8e6b5a7e0f6b7f9b6c4a4e1e3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4'; // пример: рабочий hash
-    // ВАЖНО: если получишь ошибку "version not found", я пришлю новый hash. Это зависит от модели.
+    // временно ставим заглушку; позже заменим на точный version выбранной модели
+    const version = 'REPLACE_WITH_MODEL_VERSION_HASH';
 
-    // Ключи input у этой модели: background и overlay
-    const input = {
-      background: interiorDataUrl,  // интерьер
-      overlay: artworkDataUrl,      // арт (прозрачный PNG лучше, но подойдёт и JPG)
-      // Доп.параметры (если доступны у модели) можно добавить сюда:
-      // opacity: 1.0,
-      // position: 'auto', // auto центровка; при желании зададим x/y/scale
-    };
-
-    // Создаём задачу на Replicate
     const create = await fetch('https://api.replicate.com/v1/predictions', {
       method: 'POST',
       headers: {
         Authorization: `Token ${REPLICATE_API_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ version, input }),
+      body: JSON.stringify({
+        version,
+        input: { background: interiorDataUrl, overlay: artworkDataUrl },
+      }),
     });
 
     if (!create.ok) {
@@ -76,10 +64,9 @@ export default async function handler(req) {
     }
 
     let prediction = await create.json();
-
-    // Пуллинг результата (до 60 сек)
     const pollUrl = prediction.urls?.get;
     const started = Date.now();
+
     while (!['succeeded', 'failed', 'canceled'].includes(prediction.status)) {
       await new Promise(r => setTimeout(r, 1500));
       const r = await fetch(pollUrl, { headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` } });
