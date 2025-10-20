@@ -3,7 +3,7 @@
 
 import fetch from 'node-fetch';
 
-export const config = { runtime: 'edge' };
+export const config = { runtime: 'nodejs' };
 
 function sendJSON(status, obj) {
   return new Response(JSON.stringify(obj), {
