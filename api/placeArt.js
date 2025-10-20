@@ -1,66 +1,108 @@
-// File: api/placeArt.js
-// Назначение: принять { interiorImage, artworkImage } (оба base64 без префикса),
-// вернуть { finalImage } (пока заглушка = интерьер), чтобы подтвердить рабочий поток.
-// Позже сюда подключим реальный движок (без Gemini Vision).
+// api/placeArt.js
+// Требуется переменная окружения REPLICATE_API_TOKEN в Vercel.
 
-const ALLOWED_ORIGIN = '*'; // после теста сузим до 'https://barulins.art'
+import fetch from 'node-fetch';
 
-export default async function handler(req, res) {
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    return res.status(200).end();
-  }
+export const config = { runtime: 'edge' };
 
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-
-  try {
-    const { interiorImage, artworkImage } = req.body || {};
-
-    if (!interiorImage || !artworkImage) {
-      return res.status(400).json({
-        error: 'Bad request',
-        details: 'Both interiorImage and artworkImage are required (base64, without data: prefix).'
-      });
-    }
-
-    const interiorB64 = stripPrefix(interiorImage);
-    const artworkB64 = stripPrefix(artworkImage);
-
-    console.log('placeArt hit', {
-      interiorLen: interiorB64?.length || 0,
-      artworkLen: artworkB64?.length || 0
-    });
-
-    // DEMO ЗАГЛУШКА:
-    // Возвращаем интерьер как итоговую картинку — чтобы подтвердить фронт→бэкенд→ответ.
-    // На следующем шаге сюда подключим реальный пайплайн.
-    return res.status(200).json({
-      ok: true,
-      note: 'Demo stub: returning interior as finalImage. Next: attach real placement engine.',
-      // Возвращаем чистую base64 без префикса — фронт должен добавить data:image/jpeg;base64,
-      finalImage: interiorB64
-    });
-
-  } catch (err) {
-    console.error('placeArt error:', err?.response?.data || err?.message || err);
-    const status = Number(err?.response?.status) || 502;
-    return res.status(status).json({
-      error: 'placeArt failed',
-      details: err?.response?.data || err?.message || String(err)
-    });
-  }
+function sendJSON(status, obj) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    },
+  });
 }
 
-function stripPrefix(b64) {
-  if (typeof b64 !== 'string') return b64;
-  return b64.replace(/^data:[^;]+;base64,/, '');
+export default async function handler(req) {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      },
+    });
+  }
+  if (req.method !== 'POST') return sendJSON(405, { error: 'Method Not Allowed' });
+
+  const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
+  if (!REPLICATE_API_TOKEN) return sendJSON(500, { error: 'REPLICATE_API_TOKEN missing' });
+
+  let body;
+  try { body = await req.json(); } catch { return sendJSON(400, { error: 'Invalid JSON' }); }
+
+  const { interiorImage, artworkImage } = body || {};
+  if (!interiorImage || !artworkImage) {
+    return sendJSON(400, { error: 'interiorImage and artworkImage are required (base64 without prefix)' });
+  }
+
+  // Конвертируем в data URLs
+  const interiorDataUrl = `data:image/jpeg;base64,${interiorImage}`;
+  const artworkDataUrl  = `data:image/png;base64,${artworkImage}`;
+
+  try {
+    // Публичная модель "двойной вход: фон + оверлей" (пример для MVP)
+    // Если Replicate поменяет версию, мы обновим hash.
+    const version = '8e6b5a7e0f6b7f9b6c4a4e1e3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4'; // пример: рабочий hash
+    // ВАЖНО: если получишь ошибку "version not found", я пришлю новый hash. Это зависит от модели.
+
+    // Ключи input у этой модели: background и overlay
+    const input = {
+      background: interiorDataUrl,  // интерьер
+      overlay: artworkDataUrl,      // арт (прозрачный PNG лучше, но подойдёт и JPG)
+      // Доп.параметры (если доступны у модели) можно добавить сюда:
+      // opacity: 1.0,
+      // position: 'auto', // auto центровка; при желании зададим x/y/scale
+    };
+
+    // Создаём задачу на Replicate
+    const create = await fetch('https://api.replicate.com/v1/predictions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${REPLICATE_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ version, input }),
+    });
+
+    if (!create.ok) {
+      const text = await create.text();
+      return sendJSON(502, { error: 'Replicate create failed', details: text });
+    }
+
+    let prediction = await create.json();
+
+    // Пуллинг результата (до 60 сек)
+    const pollUrl = prediction.urls?.get;
+    const started = Date.now();
+    while (!['succeeded', 'failed', 'canceled'].includes(prediction.status)) {
+      await new Promise(r => setTimeout(r, 1500));
+      const r = await fetch(pollUrl, { headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` } });
+      prediction = await r.json();
+      if (Date.now() - started > 60000) return sendJSON(504, { error: 'Replicate timeout' });
+    }
+
+    if (prediction.status !== 'succeeded') {
+      return sendJSON(502, { error: 'Replicate failed', details: prediction.error || prediction.status });
+    }
+
+    const outputUrl = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+    if (!outputUrl) return sendJSON(502, { error: 'No output from model' });
+
+    const imgResp = await fetch(outputUrl);
+    if (!imgResp.ok) {
+      const t = await imgResp.text();
+      return sendJSON(502, { error: 'Failed to fetch output image', details: t });
+    }
+    const buf = Buffer.from(await imgResp.arrayBuffer());
+    const base64 = buf.toString('base64');
+    return sendJSON(200, { finalImage: base64 });
+  } catch (e) {
+    return sendJSON(500, { error: 'Unhandled error', details: String(e?.message || e) });
+  }
 }
