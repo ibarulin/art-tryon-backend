@@ -1,5 +1,8 @@
 {
-"name": "art-tryon-backend",
-"private": true,
-"type": "module",
-"engines": { "node": "20.x" }
+  "name": "art-tryon-backend",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "20.x"
+  }
+}
