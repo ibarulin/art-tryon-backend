@@ -1,97 +1,44 @@
-// api/tryOn.js — серверный композитинг (без ML)
-import sharp from 'sharp';
-
-export const config = { api: { bodyParser: { sizeLimit: '8mb' } } };
-
-async function fetchBuffer(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
-  return Buffer.from(await r.arrayBuffer());
-}
-
+// api/tryOn.js
 export default async function handler(req, res) {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(204).end();
+  // Only POST
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, OPTIONS');
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
-    const {
-      interior_url, art_url,
-      x = 0.5, y = 0.5,        // позиция центра (0..1)
-      scale = 0.5,             // доля ширины интерьера (0.05..1)
-      opacity = 1.0            // 0..1
-    } = req.body || {};
+    const ct = req.headers['content-type'] || '';
+    if (!ct.includes('application/json')) {
+      return res.status(415).json({ error: 'Unsupported Media Type. Use application/json' });
+    }
 
+    const { interior_url, art_url } = req.body || {};
+
+    // Basic validation
     if (!interior_url || !art_url) {
       return res.status(400).json({ error: 'interior_url and art_url are required' });
     }
+    const isHttp = (u) => typeof u === 'string' && /^https?:\/\//i.test(u);
+    if (!isHttp(interior_url) || !isHttp(art_url)) {
+      return res.status(400).json({ error: 'Both interior_url and art_url must be http(s) URLs' });
+    }
 
-    // Загружаем исходники
-    const [interiorBuf, artBuf] = await Promise.all([
-      fetchBuffer(interior_url),
-      fetchBuffer(art_url)
-    ]);
+    // Mock composition: just echo back the art_url as the "result"
+    const result_url = art_url;
 
-    // Метаданные интерьера
-    const interiorMeta = await sharp(interiorBuf).metadata();
-    const W = interiorMeta.width || 1024;
-    const H = interiorMeta.height || 768;
-
-    // Масштаб арта
-    const clampedScale = Math.min(Math.max(Number(scale) || 0.5, 0.05), 1);
-    const targetArtWidth = Math.max(1, Math.round(W * clampedScale));
-
-    const artResized = await sharp(artBuf)
-      .resize({ width: targetArtWidth, withoutEnlargement: true })
-      .toBuffer();
-
-    const artMeta = await sharp(artResized).metadata();
-    const aw = artMeta.width || targetArtWidth;
-    const ah = artMeta.height || Math.round(targetArtWidth * 0.75);
-
-    // Позиция центра → координаты левого верхнего угла
-    const cx = Math.min(Math.max(Number(x) || 0.5, 0), 1) * W;
-    const cy = Math.min(Math.max(Number(y) || 0.5, 0), 1) * H;
-
-    const left = Math.round(cx - aw / 2);
-    const top  = Math.round(cy - ah / 2);
-
-    // Прозрачность
-    const op = Math.min(Math.max(Number(opacity) || 1, 0), 1);
-    const artWithOpacity = op < 1
-      ? await sharp(artResized)
-          .ensureAlpha()
-          .joinChannel(
-            await sharp({
-              create: { width: aw, height: ah, channels: 1, background: Math.round(op * 255) }
-            }).png().toBuffer()
-          )
-          .toBuffer()
-      : artResized;
-
-    // Композитинг
-    const out = await sharp(interiorBuf)
-      .composite([{ input: artWithOpacity, left, top }])
-      .jpeg({ quality: 90 })
-      .toBuffer();
-
-    // Возвращаем в data URL (не нужно доп. хранилище)
-    const base64 = out.toString('base64');
-    const dataUrl = `data:image/jpeg;base64,${base64}`;
+    // Optional: minimal log
+    console.log('[TRYON MOCK] ok', { interior: interior_url.slice(0, 60), art: art_url.slice(0, 60) });
 
     return res.status(200).json({
       ok: true,
-      result_url: dataUrl,
-      debug: { W, H, aw, ah, left, top, x, y, scale: clampedScale, opacity: op }
+      result_url,
+      mode: 'mock',
+      note: 'This is a placeholder. Replace with real model integration when ready.'
     });
-  } catch (e) {
-    return res.status(500).json({ error: 'compose_failed', details: String(e) });
+  } catch (err) {
+    console.error('[TRYON MOCK] error', err);
+    return res.status(500).json({
+      error: 'compose_failed',
+      details: err?.message || String(err)
+    });
   }
 }
