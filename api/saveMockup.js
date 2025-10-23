@@ -2,7 +2,7 @@
 import { applyCors } from './_cors';
 
 export default async function handler(req, res) {
-  if (applyCors(req, res)) return; // OPTIONS handled
+  if (applyCors(req, res)) return;
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -44,7 +44,7 @@ export default async function handler(req, res) {
       public_id: data.public_id
     });
   } catch (err) {
-    console.error('saveMockup error:', err);
+    console.error('saveMockup error', err);
     return res.status(500).json({ error: 'upload_failed', details: err?.message || String(err) });
   }
 }
