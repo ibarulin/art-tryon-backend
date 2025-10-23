@@ -1,8 +1,30 @@
 // api/placeArt.js
 import { applyCors } from './_cors';
 
+function applyInlineCors(req, res) {
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24h
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return true; // preflight обработан
+  }
+  return false;
+}
+
 export default async function handler(req, res) {
-  if (applyCors(req, res)) return;
+  // Пытаемся применить ваш общий CORS-хелпер (если есть)
+  try {
+    if (typeof applyCors === 'function') {
+      if (applyCors(req, res)) return;
+    }
+  } catch (_) {
+    // игнорируем и используем инлайн-CORS ниже
+  }
+  if (applyInlineCors(req, res)) return;
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
